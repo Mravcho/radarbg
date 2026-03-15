@@ -1,21 +1,9 @@
-[[headers]]
-  for = "/*"
-  [headers.values]
-    X-Frame-Options = "DENY"
-    X-Content-Type-Options = "nosniff"
-    Permissions-Policy = "geolocation=(self)"
+[build]
+  publish = "."
+  command = "echo done"
 
-[[headers]]
-  for = "/sw.js"
-  [headers.values]
-    Cache-Control = "no-cache"
+[build.environment]
+  NODE_VERSION = "20"
 
-[[headers]]
-  for = "/cameras.json"
-  [headers.values]
-    Cache-Control = "public, max-age=3600"
-
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+[[plugins]]
+  # Disable Next.js auto-detection
