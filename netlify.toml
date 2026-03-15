@@ -5,5 +5,5 @@
 [build.environment]
   NODE_VERSION = "20"
 
-[[plugins]]
-  # Disable Next.js auto-detection
+[build.processing]
+  skip_processing = false
