@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0c0f">
+<meta name="description" content="RadarBG — камери, полиция и зарядни в реално време">
+<title>RadarBG</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#0a0c0f; --bg2:#111318; --bg3:#181c24;
+  --surface:#1e2330; --border:#2a3040;
+  --text:#e8eaf0; --text2:#8b92a8;
+  --accent:#00d4ff; --accent-dim:rgba(0,212,255,0.12);
+  --police:#ff4d4d; --camera:#ffaa00; --avg:#ff6b35;
+  --charge:#00cc88; --success:#00cc88; --warn:#ff8c00;
+  --font:'Space Grotesk',sans-serif; --r:12px;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font);overflow:hidden}
+#app{display:flex;flex-direction:column;height:100vh;position:relative}
+
+/* ── TOP BAR ── */
+#topbar{
+  position:absolute;top:0;left:0;right:0;z-index:1000;
+  padding:max(env(safe-area-inset-top),10px) 14px 8px;
+  background:linear-gradient(to bottom,rgba(10,12,15,0.97) 55%,transparent);
+  display:flex;align-items:center;gap:8px;
+}
+#logo{font-size:18px;font-weight:700;letter-spacing:-.5px;color:var(--accent);flex-shrink:0}
+#logo span{color:var(--text2);font-weight:400}
+#status-row{display:flex;align-items:center;gap:5px;margin-left:6px}
+#status-dot{width:7px;height:7px;border-radius:50%;background:var(--text2);flex-shrink:0;transition:background .3s}
+#status-dot.gps{background:var(--success)}
+#status-dot.busy{background:var(--warn)}
+#status-txt{font-size:11px;color:var(--text2);white-space:nowrap}
+#speed-box{
+  margin-left:auto;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:3px 12px;font-size:22px;font-weight:700;
+  min-width:74px;text-align:center;line-height:1.2;flex-shrink:0;
+}
+#speed-unit{font-size:10px;color:var(--text2);font-weight:400;display:block;margin-top:-2px}
+
+/* ── NAVIGATION BAR ── */
+#nav-bar{
+  position:absolute;top:62px;left:0;right:0;z-index:999;
+  padding:0 12px 6px;
+  display:flex;gap:6px;align-items:center;
+}
+#nav-input-wrap{
+  flex:1;position:relative;display:flex;align-items:center;
+}
+#nav-input{
+  width:100%;height:40px;border-radius:10px;
+  border:1px solid var(--border);background:var(--surface);
+  color:var(--text);font-family:var(--font);font-size:13px;
+  padding:0 36px 0 36px;outline:none;
+  transition:border-color .15s;
+}
+#nav-input:focus{border-color:var(--accent)}
+#nav-input::placeholder{color:var(--text2)}
+#nav-search-icon{
+  position:absolute;left:10px;font-size:14px;
+  color:var(--text2);pointer-events:none;
+}
+#nav-clear{
+  position:absolute;right:8px;font-size:16px;color:var(--text2);
+  background:none;border:none;cursor:pointer;padding:4px;display:none;
+}
+#nav-go{
+  height:40px;padding:0 14px;border-radius:10px;
+  border:1px solid var(--accent);background:var(--accent-dim);
+  color:var(--accent);font-family:var(--font);font-size:13px;font-weight:600;
+  cursor:pointer;white-space:nowrap;flex-shrink:0;
+  transition:all .15s;-webkit-appearance:none;
+}
+#nav-go:active{transform:scale(.97)}
+#nav-stop{
+  height:40px;padding:0 12px;border-radius:10px;
+  border:1px solid var(--police);background:rgba(255,77,77,0.1);
+  color:var(--police);font-family:var(--font);font-size:12px;font-weight:600;
+  cursor:pointer;white-space:nowrap;flex-shrink:0;
+  transition:all .15s;-webkit-appearance:none;display:none;
+}
+/* Suggestions */
+#suggestions{
+  position:absolute;top:calc(100% + 2px);left:0;right:0;
+  background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+  overflow:hidden;z-index:2000;display:none;
+}
+.sug-item{
+  padding:10px 14px;font-size:13px;cursor:pointer;
+  border-bottom:1px solid var(--border);color:var(--text);
+  display:flex;align-items:center;gap:8px;
+}
+.sug-item:last-child{border-bottom:none}
+.sug-item:active{background:var(--surface)}
+.sug-icon{font-size:14px;flex-shrink:0}
+.sug-name{font-weight:500}
+.sug-addr{font-size:11px;color:var(--text2);margin-top:2px}
+
+/* ── ALERT BANNER ── */
+#alert-banner{
+  position:absolute;top:0;left:0;right:0;z-index:2500;
+  padding:0 12px;pointer-events:none;
+  opacity:0;transform:translateY(-110%);
+  transition:all .35s cubic-bezier(.34,1.56,.64,1);
+}
+#alert-banner.show{opacity:1;transform:translateY(0);pointer-events:all}
+#alert-inner{
+  margin-top:108px;border-radius:var(--r);
+  padding:12px 14px;display:flex;align-items:center;gap:10px;
+  box-shadow:0 8px 32px rgba(0,0,0,.7);backdrop-filter:blur(14px);
+}
+#alert-inner.police{background:rgba(255,77,77,.15);border:1px solid rgba(255,77,77,.5)}
+#alert-inner.camera{background:rgba(255,170,0,.15);border:1px solid rgba(255,170,0,.5)}
+#alert-inner.avg{background:rgba(255,107,53,.15);border:1px solid rgba(255,107,53,.5)}
+#alert-inner.charge{background:rgba(0,204,136,.12);border:1px solid rgba(0,204,136,.4)}
+#alert-icon{font-size:28px;flex-shrink:0}
+#alert-text{flex:1}
+#alert-title{font-size:15px;font-weight:700;margin-bottom:1px}
+#alert-sub{font-size:11px;color:var(--text2)}
+#alert-dist{font-size:22px;font-weight:700;min-width:58px;text-align:right}
+.police #alert-title,.police #alert-dist{color:var(--police)}
+.camera #alert-title,.camera #alert-dist{color:var(--camera)}
+.avg #alert-title,.avg #alert-dist{color:var(--avg)}
+.charge #alert-title,.charge #alert-dist{color:var(--charge)}
+
+/* ── MAP ── */
+#map{position:absolute;inset:0;z-index:1}
+.leaflet-tile-pane{filter:brightness(.78) saturate(.8)}
+.leaflet-control-zoom{display:none}
+.leaflet-control-attribution{display:none}
+.leaflet-popup-content-wrapper{
+  background:var(--bg2);border:1px solid var(--border);
+  color:var(--text);border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,.5);
+}
+.leaflet-popup-tip{background:var(--bg2)}
+.leaflet-popup-close-button{color:var(--text2)!important}
+/* Routing control custom style */
+.leaflet-routing-container{display:none}
+
+/* ── BOTTOM PANEL ── */
+#bottom{
+  position:absolute;bottom:0;left:0;right:0;z-index:1000;
+  padding:0 10px max(env(safe-area-inset-bottom),16px);
+  background:linear-gradient(to top,rgba(10,12,15,.98) 65%,transparent);
+}
+/* Layer toggle pills */
+#layer-pills{display:flex;gap:6px;margin-bottom:8px;margin-top:50px;overflow-x:auto;padding-bottom:2px}
+#layer-pills::-webkit-scrollbar{display:none}
+.pill{
+  flex-shrink:0;padding:5px 10px;border-radius:20px;
+  border:1px solid var(--border);background:var(--surface);
+  font-size:11px;font-weight:600;color:var(--text2);
+  cursor:pointer;transition:all .15s;-webkit-appearance:none;
+  display:flex;align-items:center;gap:4px;white-space:nowrap;
+}
+.pill.active-police{border-color:var(--police);color:var(--police);background:rgba(255,77,77,.1)}
+.pill.active-camera{border-color:var(--camera);color:var(--camera);background:rgba(255,170,0,.1)}
+.pill.active-avg{border-color:var(--avg);color:var(--avg);background:rgba(255,107,53,.1)}
+.pill.active-charge{border-color:var(--charge);color:var(--charge);background:rgba(0,204,136,.1)}
+#stats-row{display:flex;gap:6px;margin-bottom:8px}
+.stat-card{
+  flex:1;background:var(--surface);border:1px solid var(--border);
+  border-radius:9px;padding:6px 4px;text-align:center;
+}
+.stat-val{font-size:17px;font-weight:700}
+.stat-lbl{font-size:9px;color:var(--text2);margin-top:1px;font-weight:500;text-transform:uppercase;letter-spacing:.3px}
+.s-police .stat-val{color:var(--police)}
+.s-camera .stat-val{color:var(--camera)}
+.s-avg .stat-val{color:var(--avg)}
+.s-charge .stat-val{color:var(--charge)}
+.s-time .stat-val{font-size:12px;color:var(--text2)}
+
+#controls{display:flex;gap:6px}
+.ctrl-btn{
+  height:46px;border-radius:10px;border:1px solid var(--border);
+  background:var(--surface);color:var(--text);
+  font-family:var(--font);font-size:12px;font-weight:500;
+  cursor:pointer;transition:all .15s;
+  display:flex;align-items:center;justify-content:center;gap:5px;
+  -webkit-appearance:none;
+}
+.ctrl-btn:active{background:var(--bg3);transform:scale(.97)}
+#btn-center,#btn-refresh{flex:1}
+#btn-settings{width:46px;flex-shrink:0;font-size:18px}
+
+/* ── SETTINGS PANEL ── */
+#settings-panel{
+  position:absolute;bottom:0;left:0;right:0;z-index:3000;
+  background:var(--bg2);border-top:1px solid var(--border);
+  border-radius:20px 20px 0 0;
+  padding:14px 18px max(env(safe-area-inset-bottom),28px);
+  transform:translateY(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);
+  max-height:82vh;overflow-y:auto;
+}
+#settings-panel.open{transform:translateY(0)}
+#sh{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px;cursor:pointer}
+#settings-panel h3{font-size:15px;font-weight:600;margin-bottom:14px}
+.s-section{font-size:10px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 7px}
+.s-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.s-row label{flex:1;font-size:13px;color:var(--text2)}
+.s-row input[type=range]{flex:2;accent-color:var(--accent)}
+.s-row .v{font-size:12px;font-weight:600;min-width:40px;text-align:right}
+.tog-group{display:flex;gap:5px;margin-bottom:6px}
+.tog{
+  flex:1;padding:7px 4px;border-radius:8px;border:1px solid var(--border);
+  background:var(--surface);color:var(--text2);font-family:var(--font);
+  font-size:11px;font-weight:600;cursor:pointer;text-align:center;
+  -webkit-appearance:none;transition:all .15s;
+}
+.tog.on{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.info-note{
+  margin-top:12px;padding:10px 12px;
+  background:var(--surface);border-radius:8px;border:1px solid var(--border);
+  font-size:11px;color:var(--text2);line-height:1.6;
+}
+.info-note b{color:var(--text)}
+.info-note code{color:var(--accent);font-size:10px}
+
+/* ── Map markers ── */
+.marker-base{
+  display:flex;align-items:center;justify-content:center;
+  border-radius:50%;font-size:14px;
+  border:2px solid;box-shadow:0 2px 10px rgba(0,0,0,.5);
+  width:32px;height:32px;
+}
+.mk-police{background:rgba(255,77,77,.22);border-color:var(--police)}
+.mk-camera{background:rgba(255,170,0,.22);border-color:var(--camera)}
+.mk-avg{background:rgba(255,107,53,.22);border-color:var(--avg)}
+.mk-charge{background:rgba(0,204,136,.22);border-color:var(--charge)}
+.mk-me{
+  width:18px;height:18px;background:var(--accent);
+  border:3px solid #fff;border-radius:50%;
+  box-shadow:0 0 0 5px rgba(0,212,255,.25);
+}
+.mk-dest{
+  width:28px;height:28px;background:rgba(255,77,77,.25);
+  border:2px solid var(--police);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:14px;
+}
+
+/* ── EV Charge popup ── */
+.charge-popup b{color:var(--charge);font-size:13px}
+.charge-popup .pow{color:var(--warn);font-weight:600}
+.charge-popup small{color:var(--text2)}
+
+/* ── Route info bar ── */
+#route-bar{
+  position:absolute;top:108px;left:12px;right:12px;z-index:998;
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:8px 12px;display:none;align-items:center;gap:8px;
+}
+#route-bar.show{display:flex}
+#route-info{flex:1;font-size:13px}
+#route-dist{font-weight:700;color:var(--accent)}
+#route-time{color:var(--text2);font-size:12px;margin-left:6px}
+
+/* ── Loading ── */
+#loading{
+  position:fixed;inset:0;z-index:9999;background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  transition:opacity .5s;
+}
+#loading.hide{opacity:0;pointer-events:none}
+#load-logo{font-size:34px;font-weight:700;color:var(--accent);letter-spacing:-1px}
+#load-logo span{color:var(--text2);font-weight:400}
+#load-bar{width:210px;height:3px;background:var(--surface);border-radius:2px;overflow:hidden}
+#load-fill{height:100%;width:0;background:var(--accent);border-radius:2px;transition:width .4s}
+#load-txt{font-size:12px;color:var(--text2)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+</style>
+</head>
+<body>
+<div id="loading">
+  <div id="load-logo">Radar<span>BG</span></div>
+  <div id="load-bar"><div id="load-fill"></div></div>
+  <div id="load-txt">Инициализиране...</div>
+</div>
+
+<div id="app">
+  <!-- TOP BAR -->
+  <div id="topbar">
+    <div id="logo">Radar<span>BG</span></div>
+    <div id="status-row">
+      <div id="status-dot"></div>
+      <div id="status-txt">Стартиране...</div>
+    </div>
+    <div id="speed-box">--<span id="speed-unit">км/ч</span></div>
+  </div>
+
+  <!-- NAVIGATION BAR -->
+  <div id="nav-bar">
+    <div id="nav-input-wrap">
+      <span id="nav-search-icon">🔍</span>
+      <input id="nav-input" type="text" placeholder="Навигирай до..." autocomplete="off" spellcheck="false">
+      <button id="nav-clear">✕</button>
+      <div id="suggestions"></div>
+    </div>
+    <button id="nav-go">▶ Старт</button>
+    <button id="nav-stop">■ Стоп</button>
+  </div>
+
+  <!-- ROUTE INFO -->
+  <div id="route-bar">
+    <div id="route-info">
+      <span id="route-dist">--</span>
+      <span id="route-time">--</span>
+    </div>
+    <span style="font-size:11px;color:var(--text2)" id="route-eta"></span>
+  </div>
+
+  <!-- ALERT BANNER -->
+  <div id="alert-banner">
+    <div id="alert-inner">
+      <div id="alert-icon">🚨</div>
+      <div id="alert-text">
+        <div id="alert-title">ПОЛИЦИЯ</div>
+        <div id="alert-sub">Докладвано от потребители</div>
+      </div>
+      <div id="alert-dist">500м</div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- BOTTOM PANEL -->
+  <div id="bottom">
+    <div id="layer-pills">
+      <button class="pill active-police" id="pill-police">🚔 Полиция</button>
+      <button class="pill active-camera" id="pill-camera">📷 Камери</button>
+      <button class="pill active-avg" id="pill-avg">📏 Средна скорост</button>
+      <button class="pill active-charge" id="pill-charge">⚡ Зарядни</button>
+    </div>
+    <div id="stats-row">
+      <div class="stat-card s-police"><div class="stat-val" id="cnt-p">0</div><div class="stat-lbl">Полиция</div></div>
+      <div class="stat-card s-camera"><div class="stat-val" id="cnt-c">0</div><div class="stat-lbl">Камери</div></div>
+      <div class="stat-card s-avg"><div class="stat-val" id="cnt-a">0</div><div class="stat-lbl">Средна ск.</div></div>
+      <div class="stat-card s-charge"><div class="stat-val" id="cnt-e">0</div><div class="stat-lbl">Зарядни</div></div>
+      <div class="stat-card s-time"><div class="stat-val" id="cnt-t">--:--</div><div class="stat-lbl">Обновено</div></div>
+    </div>
+    <div id="controls">
+      <button class="ctrl-btn" id="btn-center">📍 Центрирай</button>
+      <button class="ctrl-btn" id="btn-refresh">↻ Обнови</button>
+      <button class="ctrl-btn" id="btn-settings">⚙</button>
+    </div>
+  </div>
+
+  <!-- SETTINGS PANEL -->
+  <div id="settings-panel">
+    <div id="sh"></div>
+    <h3>⚙ Настройки</h3>
+
+    <div class="s-section">Предупреждение (разстояние)</div>
+    <div class="s-row">
+      <label>Полиция / камера</label>
+      <input type="range" id="s-alert" min="200" max="2000" step="100" value="800">
+      <span class="v" id="l-alert">800м</span>
+    </div>
+    <div class="s-row">
+      <label>Средна скорост (начало)</label>
+      <input type="range" id="s-avg-alert" min="500" max="5000" step="250" value="1500">
+      <span class="v" id="l-avg">1500м</span>
+    </div>
+
+    <div class="s-section">Радиус на търсене</div>
+    <div class="s-row">
+      <label>Зона</label>
+      <input type="range" id="s-radius" min="1" max="20" step="1" value="5">
+      <span class="v" id="l-radius">5км</span>
+    </div>
+
+    <div class="s-section">Звук</div>
+    <div class="tog-group">
+      <button class="tog on" id="t-sound-on">🔊 Включен</button>
+      <button class="tog" id="t-sound-off">🔇 Изключен</button>
+    </div>
+
+    <div class="s-section">Автоматично обновяване</div>
+    <div class="s-row">
+      <label>Интервал</label>
+      <input type="range" id="s-interval" min="30" max="300" step="30" value="60">
+      <span class="v" id="l-interval">60с</span>
+    </div>
+
+    <div class="s-section">Зарядни станции</div>
+    <div class="tog-group">
+      <button class="tog on" id="t-all-charge">Всички</button>
+      <button class="tog" id="t-fast-charge">Само бързи (≥50kW)</button>
+    </div>
+
+    <div class="info-note">
+      <b>🎥 OSM камери</b> — обновяват се автоматично всяка нощ от OpenStreetMap.<br>
+      <b>⚡ Зарядни</b> — OpenChargeMap, live данни при всяко зареждане.<br>
+      <b>🚔 Полиция</b> — Waze livemap, реално време.<br><br>
+      <b>🚗 Tesla:</b> <code>radarbg.netlify.app</code>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
