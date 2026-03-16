@@ -28,7 +28,6 @@ let isRefreshing  = false;
 let routeControl  = null;
 let destMarker    = null;
 let searchDebounce= null;
-
 let myMarker  = null;
 let myCircle  = null;
 
@@ -170,31 +169,12 @@ function checkProximity() {
   }
 }
 
-// ── CORS proxy fetch ──────────────────────────────────────────────────────────
-const PROXIES = [
-  u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-  u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
-];
-async function proxyFetch(rawUrl) {
-  for (const fn of PROXIES) {
-    try {
-      const r = await fetch(fn(rawUrl), { signal: AbortSignal.timeout(7000) });
-      if (!r.ok) continue;
-      const txt = await r.text();
-      try { const j = JSON.parse(txt); return j.contents ? JSON.parse(j.contents) : j; }
-      catch { continue; }
-    } catch { /* next */ }
-  }
-  return null;
-}
-
-// ── Waze data (police + jams + incidents) ─────────────────────────────────────
-// Jam level → color
+// ── Waze helpers ──────────────────────────────────────────────────────────────
 function jamColor(level) {
-  if (level >= 4) return '#ff3333'; // standstill
-  if (level >= 3) return '#ff8800'; // heavy
-  if (level >= 2) return '#ffcc00'; // moderate
-  return '#aacc00';                 // light
+  if (level >= 4) return '#ff3333';
+  if (level >= 3) return '#ff8800';
+  if (level >= 2) return '#ffcc00';
+  return '#aacc00';
 }
 function jamLabel(level, delay) {
   const labels = ['', 'Лека', 'Умерена', 'Тежка', 'Пълна спирка'];
@@ -202,37 +182,38 @@ function jamLabel(level, delay) {
   const d = delay ? ` · +${Math.round(delay/60)} мин` : '';
   return l + d;
 }
-
-// Incident subtype → emoji + label
 function incidentInfo(type, subtype) {
   const map = {
-    'ACCIDENT':                    { emoji:'💥', label:'Катастрофа' },
-    'HAZARD_ON_ROAD':              { emoji:'⚠️', label:'Препятствие' },
-    'HAZARD_ON_ROAD_CAR_STOPPED':  { emoji:'🚗', label:'Спряла кола' },
-    'HAZARD_ON_ROAD_CONSTRUCTION': { emoji:'🚧', label:'Строителство' },
-    'HAZARD_ON_ROAD_ICE':          { emoji:'🧊', label:'Лед на пътя' },
-    'HAZARD_ON_ROAD_OBJECT':       { emoji:'📦', label:'Обект на пътя' },
-    'HAZARD_ON_ROAD_POT_HOLE':     { emoji:'🕳️', label:'Дупка' },
+    'ACCIDENT':                           { emoji:'💥', label:'Катастрофа' },
+    'HAZARD_ON_ROAD':                     { emoji:'⚠️', label:'Препятствие' },
+    'HAZARD_ON_ROAD_CAR_STOPPED':         { emoji:'🚗', label:'Спряла кола' },
+    'HAZARD_ON_ROAD_CONSTRUCTION':        { emoji:'🚧', label:'Строителство' },
+    'HAZARD_ON_ROAD_ICE':                 { emoji:'🧊', label:'Лед на пътя' },
+    'HAZARD_ON_ROAD_OBJECT':              { emoji:'📦', label:'Обект на пътя' },
+    'HAZARD_ON_ROAD_POT_HOLE':            { emoji:'🕳️', label:'Дупка' },
     'HAZARD_ON_ROAD_TRAFFIC_LIGHT_FAULT': { emoji:'🚦', label:'Неработещ светофар' },
-    'HAZARD_WEATHER':              { emoji:'🌧️', label:'Лошо време' },
-    'HAZARD_WEATHER_FLOOD':        { emoji:'🌊', label:'Наводнение' },
-    'HAZARD_WEATHER_FOG':          { emoji:'🌫️', label:'Мъгла' },
-    'ROAD_CLOSED':                 { emoji:'🚫', label:'Затворен път' },
+    'HAZARD_WEATHER':                     { emoji:'🌧️', label:'Лошо време' },
+    'HAZARD_WEATHER_FLOOD':               { emoji:'🌊', label:'Наводнение' },
+    'HAZARD_WEATHER_FOG':                 { emoji:'🌫️', label:'Мъгла' },
+    'ROAD_CLOSED':                        { emoji:'🚫', label:'Затворен път' },
   };
   return map[subtype] || map[type] || { emoji:'⚠️', label:'Инцидент' };
 }
 
+// ── Waze data — през Netlify Function (без CORS) ──────────────────────────────
 async function loadWaze() {
-  const box = 0.016 * (CFG.searchRadius + 1);
-  const url = `https://www.waze.com/row-rtserver/web/TGeoRSS?tk=community&format=JSON`
-    + `&left=${myLng-box*1.5}&right=${myLng+box*1.5}&bottom=${myLat-box}&top=${myLat+box}`
-    + `&ma=200&mj=200&mu=200&types=alerts,jams`;
+  let data = null;
+  try {
+    const r = await fetch(
+      `/.netlify/functions/waze?lat=${myLat}&lng=${myLng}&radius=${CFG.searchRadius}`,
+      { signal: AbortSignal.timeout(9000) }
+    );
+    if (r.ok) data = await r.json();
+  } catch(e) { console.warn('Waze:', e); }
 
-  const data = await proxyFetch(url);
   let polCnt = 0, jamCnt = 0, incCnt = 0;
 
   if (!data) {
-    // Demo fallback
     if (CFG.showPolice) {
       [[myLat+.005,myLng+.008],[myLat-.007,myLng-.004]].forEach((p,i) => {
         const [lat,lng] = p;
@@ -245,16 +226,13 @@ async function loadWaze() {
     return { polCnt, jamCnt, incCnt };
   }
 
-  // ── Alerts (police + incidents) ───────────────────────────────────────────
   (data.alerts || []).forEach(a => {
     const lat = a.location?.y, lng = a.location?.x;
     if (!lat || !lng) return;
     if (distM(myLat,myLng,lat,lng) > CFG.searchRadius*1000*1.2) return;
-
     const type    = (a.type    || '').toUpperCase();
     const subtype = (a.subtype || '').toUpperCase();
 
-    // Police
     if (type === 'POLICE' && CFG.showPolice) {
       const isHiding = subtype.includes('HIDING');
       const icon = isHiding ? mkIcon('mk-police', '🕵️') : ICONS.police;
@@ -262,40 +240,32 @@ async function loadWaze() {
       L.marker([lat,lng],{icon}).addTo(layerPolice)
         .bindPopup(`<b style="color:var(--police)">${isHiding ? '🕵️ Скрита полиция' : '🚔 Полиция'}</b><br>
           <small style="color:var(--text2)">${a.reportDescription||'Докладвано'} · ⭐${a.reportRating||0}</small>`);
-      alertItems.push({lat,lng,type:'police',id,label: isHiding ? 'Скрита полиция' : 'Докладвано'});
+      alertItems.push({lat,lng,type:'police',id,label:isHiding?'Скрита полиция':'Докладвано'});
       polCnt++;
     }
 
-    // Incidents / hazards
     if ((type === 'ACCIDENT' || type === 'HAZARD' || type === 'ROAD_CLOSED') && CFG.showIncidents) {
       const info = incidentInfo(type, subtype);
       const id = a.uuid || `inc_${lat.toFixed(5)}_${lng.toFixed(5)}`;
       L.marker([lat,lng],{icon:ICONS.incident}).addTo(layerIncidents)
-        .bindPopup(`<b style="color:var(--warn)">${info.emoji} ${info.label}</b><br>
+        .bindPopup(`<b style="color:var(--incidents)">${info.emoji} ${info.label}</b><br>
           <small style="color:var(--text2)">${a.reportDescription||'Waze'} · ⭐${a.reportRating||0}</small>`);
       alertItems.push({lat,lng,type:'incident',id,label:info.label});
       incCnt++;
     }
   });
 
-  // ── Jams ──────────────────────────────────────────────────────────────────
   if (CFG.showJams) {
-    (data.jams || []).forEach((j, idx) => {
+    (data.jams || []).forEach(j => {
       if (!j.line || j.line.length < 2) return;
       if (distM(myLat, myLng, j.line[0].y, j.line[0].x) > CFG.searchRadius*1000*1.3) return;
-
       const coords = j.line.map(p => [p.y, p.x]);
       const color  = jamColor(j.level);
       const label  = jamLabel(j.level, j.delay);
       const speed  = j.speedKMH ? `${Math.round(j.speedKMH)} км/ч` : '';
-
-      L.polyline(coords, {
-        color,
-        weight: 5,
-        opacity: 0.75,
-      }).addTo(layerJams)
+      L.polyline(coords, { color, weight: 5, opacity: 0.75 }).addTo(layerJams)
         .bindPopup(`<b style="color:${color}">🚦 Задръстване</b><br>
-          <small style="color:var(--text2)">${label}${speed ? ' · ' + speed : ''}</small>`);
+          <small style="color:var(--text2)">${label}${speed?' · '+speed:''}</small>`);
       jamCnt++;
     });
   }
@@ -310,19 +280,16 @@ async function loadOSMCameras() {
     const r = await fetch(`cameras.json?t=${Date.now()}`);
     if (!r.ok) throw new Error('no cameras.json');
     const data = await r.json();
-
     if (data.cameras && data.cameras.length > 0) {
       data.cameras.forEach(cam => {
         if (distM(myLat,myLng,cam.lat,cam.lng) > CFG.searchRadius*1000*1.5) return;
-        const id = cam.id;
         const speedStr = cam.maxspeed ? ` · ${cam.maxspeed} км/ч` : '';
-
         if (cam.type === 'average_speed') {
           if (!CFG.showAvg) return;
           L.marker([cam.lat,cam.lng],{icon:ICONS.avg}).addTo(layerAvg)
             .bindPopup(`<b style="color:var(--avg)">📏 Средна скорост</b>${speedStr}<br>
               <small style="color:var(--text2)">Начало на секция · OSM</small>`);
-          alertItems.push({lat:cam.lat,lng:cam.lng,type:'avg',id,label:`Средна скорост${speedStr}`});
+          alertItems.push({lat:cam.lat,lng:cam.lng,type:'avg',id:cam.id,label:`Средна скорост${speedStr}`});
           avg++;
         } else {
           if (!CFG.showCamera) return;
@@ -330,19 +297,17 @@ async function loadOSMCameras() {
           L.marker([cam.lat,cam.lng],{icon}).addTo(layerCamera)
             .bindPopup(`<b style="color:var(--camera)">📷 ${cam.label}</b>${speedStr}<br>
               <small style="color:var(--text2)">OpenStreetMap</small>`);
-          alertItems.push({lat:cam.lat,lng:cam.lng,type:'camera',id,label:cam.label});
+          alertItems.push({lat:cam.lat,lng:cam.lng,type:'camera',id:cam.id,label:cam.label});
           fixed++;
         }
       });
       $('cnt-t').title = `OSM: ${new Date(data.updated).toLocaleDateString('bg')}`;
     } else {
-      addDemoCameras();
-      fixed = 3; avg = 2;
+      addDemoCameras(); fixed = 3; avg = 2;
     }
   } catch(e) {
     console.warn('OSM cameras:', e);
-    addDemoCameras();
-    fixed = 3; avg = 2;
+    addDemoCameras(); fixed = 3; avg = 2;
   }
   return { fixed, avg };
 }
@@ -366,26 +331,26 @@ function addDemoCameras() {
   }
 }
 
-// ── EV Chargers ───────────────────────────────────────────────────────────────
+// ── EV Chargers — през Netlify Function (без CORS) ────────────────────────────
 async function loadChargers() {
   if (!CFG.showCharge) return 0;
   layerCharge.clearLayers();
-  const url = `https://api.openchargemap.io/v3/poi/?output=json`
-    + `&latitude=${myLat}&longitude=${myLng}`
-    + `&distance=${CFG.searchRadius}&distanceunit=KM`
-    + `&maxresults=80&compact=true&verbose=false&countrycode=BG`
-    + `&key=e65cde82-2e3f-4d44-842e-a8d3e2fba648`;
-  let cnt = 0;
+  let data = null;
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error('OCM');
-    const data = await r.json();
+    const r = await fetch(
+      `/.netlify/functions/chargers?lat=${myLat}&lng=${myLng}&radius=${CFG.searchRadius}&onlyFast=${CFG.onlyFast}`,
+      { signal: AbortSignal.timeout(9000) }
+    );
+    if (r.ok) data = await r.json();
+  } catch(e) { console.warn('Chargers:', e); }
+
+  let cnt = 0;
+  if (data && Array.isArray(data) && data.length > 0) {
     data.forEach(poi => {
       const lat = poi.AddressInfo?.Latitude, lng = poi.AddressInfo?.Longitude;
       if (!lat || !lng) return;
       let maxKw = 0;
       (poi.Connections||[]).forEach(c => { if (c.PowerKW) maxKw = Math.max(maxKw, c.PowerKW); });
-      if (CFG.onlyFast && maxKw < 50) return;
       const name   = poi.AddressInfo?.Title || 'Зарядна станция';
       const kwStr  = maxKw ? `${maxKw} kW` : '?';
       const plugs  = (poi.Connections||[]).length;
@@ -396,7 +361,7 @@ async function loadChargers() {
           <small>${status}</small></div>`);
       cnt++;
     });
-  } catch(e) {
+  } else {
     [[myLat+.008,myLng+.006],[myLat-.014,myLng+.010],[myLat+.020,myLng-.012]].forEach((p,i) => {
       const [lat,lng]=p;
       L.marker([lat,lng],{icon:ICONS.charge}).addTo(layerCharge)
@@ -578,12 +543,12 @@ function pillToggle(pillId, flag, layer, activeClass, reload=false) {
     if (reload) refreshAll();
   });
 }
-pillToggle('pill-police',    'showPolice',    layerPolice,    'active-police',   true);
-pillToggle('pill-camera',    'showCamera',    layerCamera,    'active-camera',   true);
-pillToggle('pill-avg',       'showAvg',       layerAvg,       'active-avg',      true);
-pillToggle('pill-charge',    'showCharge',    layerCharge,    'active-charge',   false);
-pillToggle('pill-jams',      'showJams',      layerJams,      'active-jams',     true);
-pillToggle('pill-incidents', 'showIncidents', layerIncidents, 'active-incidents',true);
+pillToggle('pill-police',    'showPolice',    layerPolice,    'active-police',    true);
+pillToggle('pill-camera',    'showCamera',    layerCamera,    'active-camera',    true);
+pillToggle('pill-avg',       'showAvg',       layerAvg,       'active-avg',       true);
+pillToggle('pill-charge',    'showCharge',    layerCharge,    'active-charge',    false);
+pillToggle('pill-jams',      'showJams',      layerJams,      'active-jams',      true);
+pillToggle('pill-incidents', 'showIncidents', layerIncidents, 'active-incidents', true);
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 $('btn-center').addEventListener('click', () => map.setView([myLat,myLng],14,{animate:true}));
