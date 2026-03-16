@@ -25,7 +25,6 @@ jobs:
             way["enforcement"="average_speed"](41.0,22.0,44.5,29.0);
           );
           out center;'
-          
           curl -s -X POST \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "data=${QUERY}" \
@@ -53,18 +52,14 @@ jobs:
                   lat, lng = center.get('lat'), center.get('lon')
               else:
                   continue
-
               if not lat or not lng:
                   continue
-
               key = f"{round(lat,4)}_{round(lng,4)}"
               if key in seen:
                   continue
               seen.add(key)
-
               enf = tags.get('enforcement', '')
-              hw  = tags.get('highway', '')
-
+              hw = tags.get('highway', '')
               if enf == 'average_speed':
                   cam_type = 'average_speed'
                   label = 'Средна скорост'
@@ -74,7 +69,6 @@ jobs:
               else:
                   cam_type = 'traffic_light'
                   label = 'Светофарна камера'
-
               cameras.append({
                   'lat': round(lat, 6),
                   'lng': round(lng, 6),
@@ -98,7 +92,7 @@ jobs:
 
       - name: Commit updated cameras
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add cameras.json
           if git diff --staged --quiet; then
@@ -107,7 +101,8 @@ jobs:
             git commit -m "Update OSM cameras $(date -u +%Y-%m-%d)"
             git push
           fi
-- name: Deploy to Netlify
+
+      - name: Deploy to Netlify
         run: |
           npm install -g netlify-cli
           netlify deploy --prod --dir . --auth ${{ secrets.NETLIFY_AUTH_TOKEN }} --site ${{ secrets.NETLIFY_SITE_ID }}
