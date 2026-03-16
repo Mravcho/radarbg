@@ -1,12 +1,14 @@
-name: Update OSM Cameras Daily
+name: Deploy to Netlify
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
-  update-cameras:
+  deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -104,5 +106,9 @@ jobs:
 
       - name: Deploy to Netlify
         run: |
-          npm install -g netlify-cli
-          netlify deploy --prod --dir . --auth ${{ secrets.NETLIFY_AUTH_TOKEN }} --site ${{ secrets.NETLIFY_SITE_ID }}
+          npm install -g netlify-cli --silent
+          netlify deploy --prod \
+            --dir . \
+            --auth ${{ secrets.NETLIFY_AUTH_TOKEN }} \
+            --site ${{ secrets.NETLIFY_SITE_ID }} \
+            --message "Deploy from GitHub Actions $(date -u +%Y-%m-%d\ %H:%M)"
