@@ -1,0 +1,109 @@
+name: Update OSM Cameras Daily
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-cameras:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch cameras from Overpass API
+        run: |
+          QUERY='[out:json][timeout:60];
+          (
+            node["highway"="speed_camera"](41.0,22.0,44.5,29.0);
+            node["enforcement"="maxspeed"](41.0,22.0,44.5,29.0);
+            node["enforcement"="average_speed"](41.0,22.0,44.5,29.0);
+            node["highway"="traffic_signals"]["camera"="yes"](41.0,22.0,44.5,29.0);
+            way["enforcement"="average_speed"](41.0,22.0,44.5,29.0);
+          );
+          out center;'
+          
+          curl -s -X POST \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "data=${QUERY}" \
+            "https://overpass-api.de/api/interpreter" \
+            -o raw_cameras.json
+
+      - name: Process camera data
+        run: |
+          python3 << 'EOF'
+          import json
+          from datetime import datetime, timezone
+
+          with open('raw_cameras.json') as f:
+              raw = json.load(f)
+
+          cameras = []
+          seen = set()
+
+          for el in raw.get('elements', []):
+              tags = el.get('tags', {})
+              if el['type'] == 'node':
+                  lat, lng = el.get('lat'), el.get('lon')
+              elif el['type'] == 'way':
+                  center = el.get('center', {})
+                  lat, lng = center.get('lat'), center.get('lon')
+              else:
+                  continue
+
+              if not lat or not lng:
+                  continue
+
+              key = f"{round(lat,4)}_{round(lng,4)}"
+              if key in seen:
+                  continue
+              seen.add(key)
+
+              enf = tags.get('enforcement', '')
+              hw  = tags.get('highway', '')
+
+              if enf == 'average_speed':
+                  cam_type = 'average_speed'
+                  label = 'Средна скорост'
+              elif enf == 'maxspeed' or hw == 'speed_camera':
+                  cam_type = 'fixed'
+                  label = 'Фиксирана камера'
+              else:
+                  cam_type = 'traffic_light'
+                  label = 'Светофарна камера'
+
+              cameras.append({
+                  'lat': round(lat, 6),
+                  'lng': round(lng, 6),
+                  'type': cam_type,
+                  'label': label,
+                  'maxspeed': tags.get('maxspeed', ''),
+                  'id': f"osm_{el['id']}",
+              })
+
+          output = {
+              'updated': datetime.now(timezone.utc).isoformat(),
+              'count': len(cameras),
+              'cameras': cameras,
+          }
+
+          with open('cameras.json', 'w', encoding='utf-8') as f:
+              json.dump(output, f, ensure_ascii=False, separators=(',', ':'))
+
+          print(f"Saved {len(cameras)} cameras")
+          EOF
+
+      - name: Commit updated cameras
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add cameras.json
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Update OSM cameras $(date -u +%Y-%m-%d)"
+            git push
+          fi
