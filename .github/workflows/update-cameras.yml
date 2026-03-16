@@ -27,11 +27,25 @@ jobs:
             way["enforcement"="average_speed"](41.0,22.0,44.5,29.0);
           );
           out center;'
-          curl -s -X POST \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "data=${QUERY}" \
-            "https://overpass-api.de/api/interpreter" \
-            -o raw_cameras.json
+
+          for i in 1 2 3; do
+            curl -s -X POST \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              --data-urlencode "data=${QUERY}" \
+              "https://overpass-api.de/api/interpreter" \
+              -o raw_cameras.json
+
+            SIZE=$(wc -c < raw_cameras.json)
+            echo "Attempt $i: ${SIZE} bytes"
+
+            if [ "$SIZE" -gt 100 ]; then
+              echo "Success!"
+              break
+            fi
+
+            echo "Empty response, waiting 15s..."
+            sleep 15
+          done
 
       - name: Process camera data
         run: |
